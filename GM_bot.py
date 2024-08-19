@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.ui import Button, View
 import random
 import asyncio
@@ -26,6 +26,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 CONFIG_FILE = 'config.json'
 GUILD_FILE = 'guilds.json'
+RANKING_FILE = 'ranking.json'
 
 def save_config(data):
     with open(CONFIG_FILE, 'w') as f:
@@ -49,16 +50,43 @@ def load_guilds():
     if os.path.exists(GUILD_FILE):
         try:
             with open(GUILD_FILE, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                for guild_id in data:
+                    for user_name, user_data in data[guild_id].items():
+                        if 'join_time' in user_data:
+                            user_data['join_time'] = datetime.fromisoformat(user_data['join_time'])
+                return data
         except json.JSONDecodeError:
             print("길드 파일이 손상되었습니다.")
             return {}
     return {}
 
+def save_ranking(data):
+    for guild_id in data:
+        for user_id, user_data in data[guild_id].items():
+            if 'join_time' in user_data:
+                if isinstance(user_data['join_time'], datetime):
+                    user_data['join_time'] = user_data['join_time'].isoformat()
+    with open(RANKING_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
+def load_ranking():
+    if os.path.exists(RANKING_FILE):
+        try:
+            with open(RANKING_FILE, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print("랭킹 파일이 손상되었습니다.")
+            return {}
+    return {}
+
 @bot.event
 async def on_ready():
+    bot.add_view(PersistentView())
     await bot.change_presence(activity=discord.Game(name="인사"))
     print(f'Logged in as {bot.user}')
+    configs = load_config()
+    update_rankings.start()
 
 @bot.event
 async def on_message(message):
@@ -70,6 +98,96 @@ async def on_message(message):
 
     if message.content.startswith('!') and not message.content.startswith('!청소'):
         await message.delete()
+    
+    ranking_data = load_ranking()
+    user_id = str(message.author.id)
+    guild_id = str(message.guild.id)
+    if guild_id not in ranking_data:
+        ranking_data[guild_id] = {}
+    if user_id not in ranking_data[guild_id]:
+        ranking_data[guild_id][user_id] = {"message_count": 0, "voice_time": 0}
+    ranking_data[guild_id][user_id]["message_count"] += 1
+
+    save_ranking(ranking_data)
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    ranking_data = load_ranking()
+    guild_id = str(member.guild.id)
+    user_id = str(member.id)
+    if guild_id not in ranking_data:
+        ranking_data[guild_id] = {}
+    if user_id not in ranking_data[guild_id]:
+        ranking_data[guild_id][user_id] = {"message_count": 0, "voice_time": 0}
+    if before.channel is None and after.channel is not None:
+        ranking_data[guild_id][user_id]['join_time'] = datetime.now(kst).isoformat()
+    elif before.channel is not None and after.channel is None:
+        if 'join_time' in ranking_data[guild_id][user_id]:
+            join_time_str = ranking_data[guild_id][user_id].pop('join_time')
+            join_time = datetime.fromisoformat(join_time_str)
+            leave_time = datetime.now(kst)
+            duration = leave_time - join_time
+            ranking_data[guild_id][user_id]['voice_time'] += duration.total_seconds()
+
+    save_ranking(ranking_data)
+
+@tasks.loop(minutes=1)
+async def update_rankings():
+    now = datetime.now(kst)
+    if now.minute == 0:
+        await announce_rankings()
+
+async def announce_rankings():
+    now = datetime.now(kst)
+    ranking_data = load_ranking()
+    configs = load_config()
+    if not ranking_data:
+        return
+
+    for guild_id in ranking_data:
+        sorted_by_message_count = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['message_count'], reverse=True)
+        sorted_by_voice_time = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['voice_time'], reverse=True)
+        guild = bot.get_guild(int(guild_id))
+        channel_id = configs[guild_id].get('ranking_channel_id')
+        channel = bot.get_channel(channel_id)
+        message_id = configs[guild_id].get('ranking_message_id')
+        if message_id and channel:
+            message = await channel.fetch_message(message_id)
+        if not message:
+            return
+        embed = message.embeds[0]
+        embed.title = f"📊랭킹 현황({now.strftime('%Y년 %m월 %d일, %H:%M')})📊"
+        embed.description = "랭킹은 매시 00분에 업데이트됩니다."
+        embed.set_field_at(0, name=f"{guild.name} 키보드워리어 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count[:5])]), inline=False)
+        embed.set_field_at(1, name=f"{guild.name} 지박령 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time[:5])]), inline=False)
+        
+        await message.edit(embed=embed)
+
+class PersistentView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ShowEntireRankingButton(label="전체 랭킹 보기", style=discord.ButtonStyle.primary))
+
+class ShowEntireRankingButton(discord.ui.Button):
+    def __init__(self, label, style):
+        super().__init__(label=label, style=style, custom_id="show_entire_ranking_button")
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        ranking_data = load_ranking()
+        guild_id = str(interaction.guild.id)
+        guild = bot.get_guild(interaction.guild.id)
+        sorted_by_message_count = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['message_count'], reverse=True)
+        sorted_by_voice_time = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['voice_time'], reverse=True)
+        embed = discord.Embed(
+            title="📊실시간 전체 랭킹📊",
+            description="랭킹은 매시 00분에 업데이트됩니다.",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name=f"{guild.name} 키보드워리어 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count)]), inline=False)
+        embed.add_field(name=f"{guild.name} 지박령 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time)]), inline=False)
+        await interaction.user.send(embed=embed)
+    
 
 @bot.event
 async def on_member_join(member):
@@ -203,6 +321,60 @@ async def save_guild_info(guild_info, guild):
     guild_name = guild_info['guild_name']
     guilds[guild_id][guild_name] = guild_info
     save_guilds(guilds)
+
+@bot.command(name='랭킹시작', help='(운영진 전용)랭킹 업데이트를 시작합니다.\n사용법 : !랭킹시작')
+@commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
+async def 랭킹시작(ctx):
+    now = datetime.now(kst)
+    configs = load_config()
+    ranking_data = load_ranking()
+    guild_id = str(ctx.guild.id)
+    channel_id = ctx.channel.id
+    if guild_id in configs:
+        if 'ranking_channel_id' not in configs[guild_id]:
+            if guild_id not in ranking_data:
+                ranking_data[guild_id] = {}
+            for member in ctx.guild.members:
+                if not member.bot:
+                    user_id = str(member.id)
+                    if user_id not in ranking_data[guild_id]:
+                        ranking_data[guild_id][user_id] = {"message_count": 0, "voice_time": 0}
+            if guild_id in ranking_data:
+                sorted_by_message_count = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['message_count'], reverse=True)
+                sorted_by_voice_time = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['voice_time'], reverse=True)
+            configs[guild_id]['ranking_channel_id'] = channel_id
+            embed = discord.Embed(
+                title=f"📊랭킹 현황({now.strftime('%Y년 %m월 %d일, %H:%M')})📊",
+                description="랭킹은 매시 00분에 업데이트됩니다.",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name=f"⌨️{ctx.guild.name} 키보드워리어 랭킹⌨️", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count[:5])]), inline=False)
+            embed.add_field(name=f"👻{ctx.guild.name} 지박령 랭킹👻", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time[:5])]), inline=False)
+            view = PersistentView()
+            #view.add_item(ShowEntireRankingButton(label="전체 랭킹 보기", style=discord.ButtonStyle.primary))
+            msg = await ctx.send(embed=embed, view=view)
+            configs[guild_id]['ranking_message_id'] = msg.id
+            save_ranking(ranking_data)
+            save_config(configs)
+        else:
+            msg = await ctx.send("이미 랭킹이 시작되었습니다.")
+            await msg.delete(delay=5)
+
+@bot.command(name='랭킹종료', help='(운영진 전용)랭킹 업데이트를 종료합니다.\n사용법 : !랭킹종료')
+@commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
+async def 랭킹종료(ctx):
+    ranking_data = load_ranking()
+    configs = load_config()
+    guild_id = str(ctx.guild.id)
+    if guild_id in configs:
+        configs[guild_id].pop('ranking_channel_id', None)
+        configs[guild_id].pop('ranking_message_id', None)
+        save_config(configs)
+        await ctx.send("랭킹 업데이트를 종료합니다.")
+    if guild_id in ranking_data:
+        ranking_data.pop(guild_id)
+        save_ranking(ranking_data)
+
 
 @bot.command(name='추첨', help='(운영진 전용)특정 메시지에 특정 이모지를 남긴 사람들 중 당첨자를 추첨합니다.\n사용법 : !추첨 <메시지 ID> <이모지> <당첨 인원>')
 @commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
