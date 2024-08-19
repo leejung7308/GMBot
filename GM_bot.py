@@ -1034,7 +1034,7 @@ async def 출석부다운(ctx):
     except FileNotFoundError:
         await ctx.send("출석부 파일을 찾을 수 없습니다.")
 
-@bot.command(name="링크등록", help="(운영진 전용)동아리 공식 SNS, 회계장부, 회칙 등 링크를 등록합니다.\n사용법 : !회계장부등록 <공식사이트 링크> <유튜브 링크> <블로그 링크> <인스타 링크> <노션 링크> <회계장부 링크> <회칙 링크>")
+@bot.command(name="링크등록", help="(운영진 전용)동아리 공식 SNS, 회계장부, 회칙 등 링크를 등록합니다.\n사용법 : !링크등록 <공식사이트 링크> <유튜브 링크> <블로그 링크> <인스타 링크> <노션 링크> <회계장부 링크> <회칙 링크>")
 @commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
 async def 링크등록(ctx, website_link:str, youtube_link: str, blog_link: str, instagram_link: str, notion_link: str, accounting_book_link: str, rules_link: str = None):
     configs = load_config()
