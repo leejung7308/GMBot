@@ -450,10 +450,11 @@ async def 길드생성(ctx, name: str, *, description: str):
         guild = await ctx.guild.create_text_channel(name, category=category, overwrites=overwrites)
 
         await ctx.author.add_roles(guild_role)
+        button = Button(style=discord.ButtonStyle.primary, label="가입신청", custom_id=f"apply_{guild_id}_{guild_role.id}")
         created_message = await list_channel.send(embed=embed)
         await ctx.send(f"{name} 길드가 생성되었습니다.")
 
-        guilds[guild_id][name] = {
+        guilds[guild_id][guild_role.id] = {
             'guild_name': name,
             'guild_leader_id': ctx.author.id,
             'role_id': guild_role.id,
@@ -694,7 +695,7 @@ async def 출석시작(ctx):
             except Exception as e:
                 print(f"메시지를 찾을 수 없습니다. {str(e)}")
     
-    view_message = await ctx.send("아래 버튼을 눌러 출석 버튼을 전송하세요.", view=view)
+    view_message = await ctx.send(f"{today_date} 출석 체크를 시작합니다.", view=view)
 
     if guild_id in configs:
         configs[guild_id]['attendance_button_id'] = view_message.id
@@ -758,7 +759,8 @@ async def 지각시작(ctx):
                 await button_message.delete()
             except Exception as e:
                 print(f"메시지를 찾을 수 없습니다. {str(e)}")
-    view_message = await ctx.send("아래 버튼을 눌러 지각 버튼을 전송하세요.", view=view)
+    today_date = datetime.now(kst).strftime("%y.%m.%d")
+    view_message = await ctx.send(f"{today_date} 지각 체크를 시작합니다.", view=view)
     configs[guild_id]['attendance_button_id'] = view_message.id
     save_config(configs)
 
@@ -1031,6 +1033,67 @@ async def 출석부다운(ctx):
         await ctx.send(file=discord.File(file_name))
     except FileNotFoundError:
         await ctx.send("출석부 파일을 찾을 수 없습니다.")
-    
+
+@bot.command(name="링크등록", help="(운영진 전용)동아리 공식 SNS, 회계장부, 회칙 등 링크를 등록합니다.\n사용법 : !회계장부등록 <공식사이트 링크> <유튜브 링크> <블로그 링크> <인스타 링크> <노션 링크> <회계장부 링크> <회칙 링크>")
+@commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
+async def 링크등록(ctx, website_link:str, youtube_link: str, blog_link: str, instagram_link: str, notion_link: str, accounting_book_link: str, rules_link: str = None):
+    configs = load_config()
+    guild_id = str(ctx.guild.id)
+    if guild_id not in configs:
+        configs[guild_id] = {}
+    configs[guild_id]['website_link'] = website_link
+    configs[guild_id]['youtube_link'] = youtube_link
+    configs[guild_id]['blog_link'] = blog_link
+    configs[guild_id]['instagram_link'] = instagram_link
+    configs[guild_id]['notion_link'] = notion_link
+    configs[guild_id]['accounting_book_link'] = accounting_book_link
+    if rules_link:
+        configs[guild_id]['rules_link'] = rules_link
+    save_config(configs)
+    await ctx.author.send("링크가 등록되었습니다.")
+
+@bot.command(name="바로가기", help="바로가기 링크를 출력합니다.\n사용법 : !바로가기")
+async def 바로가기(ctx):
+    configs = load_config()
+    guild_id = str(ctx.guild.id)
+    if guild_id in configs:
+        embed = discord.Embed(
+            title=f"{ctx.guild.name} 바로가기",
+            description=f"{ctx.guild.name} 공식 SNS, 회계장부 등 공개 자료 바로가기입니다.",
+            color=discord.Color.blue()
+        )
+        view = discord.ui.View()
+        if 'website_link' in configs[guild_id]:
+            embed.add_field(name="공식사이트", value=configs[guild_id]['website_link'], inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label="공식사이트", url=configs[guild_id]['website_link'])
+            view.add_item(button)
+        if 'youtube_link' in configs[guild_id]:
+            embed.add_field(name="유튜브", value=configs[guild_id]['youtube_link'], inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label="유튜브", url=configs[guild_id]['youtube_link'])
+            view.add_item(button)
+        if 'blog_link' in configs[guild_id]:
+            embed.add_field(name="블로그", value=configs[guild_id]['blog_link'], inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label="블로그", url=configs[guild_id]['blog_link'])
+            view.add_item(button)
+        if 'instagram_link' in configs[guild_id]:
+            embed.add_field(name="인스타그램", value=configs[guild_id]['instagram_link'], inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label="인스타그램", url=configs[guild_id]['instagram_link'])
+            view.add_item(button)
+        if 'notion_link' in configs[guild_id]:
+            embed.add_field(name="노션", value=configs[guild_id]['notion_link'], inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label="노션", url=configs[guild_id]['notion_link'])
+            view.add_item(button)
+        if 'accounting_book_link' in configs[guild_id]:
+            embed.add_field(name="회계장부", value=configs[guild_id]['accounting_book_link'], inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label="회계장부", url=configs[guild_id]['accounting_book_link'])
+            view.add_item(button)
+        if 'rules_link' in configs[guild_id]:
+            embed.add_field(name="회칙", value=configs[guild_id]['rules_link'], inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label="회칙", url=configs[guild_id]['rules_link'])
+            view.add_item(button)
+            
+        await ctx.send(embed=embed, view=view)
+        
+
 # 봇 실행
 bot.run()
