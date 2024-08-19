@@ -470,8 +470,10 @@ async def 환영채널등록(ctx, channel: discord.TextChannel):
 
 @bot.command(name='도움말', help='사용 가능한 명령어 목록을 출력합니다.\n사용법 : !도움말')
 async def 도움말(ctx):
+    count = 0
+    page = 1
     embed = discord.Embed(
-        title="GM봇 도움말",
+        title=f"GM봇 도움말 {page}페이지",
         description="GM봇은 다양한 기능을 제공합니다.",
         color=discord.Color.blue()
     )
@@ -493,10 +495,31 @@ async def 도움말(ctx):
 
 
         embed.add_field(name=f"**{bot.command_prefix}{command.name}**", value=f"```{command.help}```", inline=False)
+        count += 1
+        if count == 25:
+            await ctx.author.send(embed=embed)
+            embed.title = "GM봇 도움말 2페이지"
+            embed.description = ""
+            embed.clear_fields()
+            count = 0
     if any(role in user_roles for role in ['봇 관리자', '운영부', 'GM 관리자']):
         embed.add_field(name="#__운영진 전용 명령어__#",value="⬇️⬇️⬇️아래부터는 운영진 전용 명령어입니다.⬇️⬇️⬇️" , inline=False)
+        count += 1
+        if count == 25:
+            await ctx.author.send(embed=embed)
+            embed.title = "GM봇 도움말 2페이지"
+            embed.description = ""
+            embed.clear_fields()
+            count = 0
         for command in higher_commands:
             embed.add_field(name=f"**{bot.command_prefix}{command.name}**", value=f"```{command.help}```", inline=False)
+            count += 1
+            if count == 25:
+                await ctx.author.send(embed=embed)
+                embed.title = "GM봇 도움말 2페이지"
+                embed.description = ""
+                embed.clear_fields()
+                count = 0
     await ctx.author.send(embed=embed)
 
 @bot.command(name='길드도움말', help='길드 관련 명령어 목록을 출력합니다.\n사용법 : !길드도움말')
