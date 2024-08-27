@@ -50,12 +50,7 @@ def load_guilds():
     if os.path.exists(GUILD_FILE):
         try:
             with open(GUILD_FILE, 'r') as f:
-                data = json.load(f)
-                for guild_id in data:
-                    for user_name, user_data in data[guild_id].items():
-                        if 'join_time' in user_data:
-                            user_data['join_time'] = datetime.fromisoformat(user_data['join_time'])
-                return data
+                return json.load(f)
         except json.JSONDecodeError:
             print("길드 파일이 손상되었습니다.")
             return {}
@@ -145,6 +140,14 @@ async def announce_rankings():
         return
 
     for guild_id in ranking_data:
+        for user_id, user_data in ranking_data[guild_id].items():
+            if 'join_time' in user_data:
+                join_time_str = user_data.pop('join_time')
+                join_time = datetime.fromisoformat(join_time_str)
+                leave_time = datetime.now(kst)
+                duration = leave_time - join_time
+                user_data['voice_time'] += duration.total_seconds()
+                ranking_data[guild_id][user_id]['join_time'] = leave_time.isoformat()
         sorted_by_message_count = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['message_count'], reverse=True)
         sorted_by_voice_time = sorted(ranking_data[guild_id].items(), key=lambda x: x[1]['voice_time'], reverse=True)
         guild = bot.get_guild(int(guild_id))
@@ -158,21 +161,26 @@ async def announce_rankings():
         embed = message.embeds[0]
         embed.title = f"📊랭킹 현황({now.strftime('%Y년 %m월 %d일, %H:%M')})📊"
         embed.description = "랭킹은 매시 00분에 업데이트됩니다."
-        embed.set_field_at(0, name=f"{guild.name} 키보드워리어 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count[:5])]), inline=False)
-        embed.set_field_at(1, name=f"{guild.name} 지박령 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time[:5])]), inline=False)
-        
+        embed.set_field_at(0, name=f"⌨️ {guild.name} 키보드워리어 랭킹 ⌨️", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count[:5])]), inline=False)
+        embed.set_field_at(1, name=f"👻 {guild.name} 지박령 랭킹 👻", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time[:5])]), inline=False)
+        save_config(configs)
+        save_ranking(ranking_data)
         await message.edit(embed=embed)
 
 class PersistentView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(ShowEntireRankingButton(label="전체 랭킹 보기", style=discord.ButtonStyle.primary))
+        #self.add_item(RefreshRankingButton(label="랭킹 갱신하기", style=discord.ButtonStyle.secondary))
 
 class ShowEntireRankingButton(discord.ui.Button):
     def __init__(self, label, style):
         super().__init__(label=label, style=style, custom_id="show_entire_ranking_button")
     
     async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        self.disabled = True
+        await interaction.message.edit(view=view)
         await interaction.response.defer()
         ranking_data = load_ranking()
         guild_id = str(interaction.guild.id)
@@ -184,10 +192,29 @@ class ShowEntireRankingButton(discord.ui.Button):
             description="랭킹은 매시 00분에 업데이트됩니다.",
             color=discord.Color.blue()
         )
-        embed.add_field(name=f"{guild.name} 키보드워리어 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count)]), inline=False)
-        embed.add_field(name=f"{guild.name} 지박령 랭킹", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time)]), inline=False)
+        embed.add_field(name=f"⌨️ {guild.name} 키보드워리어 랭킹 ⌨️", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count)]), inline=False)
+        embed.add_field(name=f"👻 {guild.name} 지박령 랭킹 👻", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time)]), inline=False)
         await interaction.user.send(embed=embed)
+
+        self.label = "전체 랭킹 보기"
+        self.disabled = False
+        await interaction.message.edit(view=view)
+
+'''class RefreshRankingButton(discord.ui.Button):
+    def __init__(self, label, style):
+        super().__init__(label=label, style=style, custom_id="refresh_ranking_button")
     
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        self.disabled = True
+        await interaction.message.edit(view=view)
+        await interaction.response.defer()
+        await announce_rankings()
+
+        self.label = "랭킹 갱신하기"
+        self.disabled = False
+        await interaction.message.edit(view=view)'''
+        
 
 @bot.event
 async def on_member_join(member):
@@ -203,6 +230,8 @@ async def on_member_join(member):
 @bot.event
 async def on_raw_reaction_add(payload):
 
+    if payload.member.bot:
+        return
     guild_id = str(payload.guild_id)
 
     ## 역할 부여
@@ -348,10 +377,9 @@ async def 랭킹시작(ctx):
                 description="랭킹은 매시 00분에 업데이트됩니다.",
                 color=discord.Color.blue()
             )
-            embed.add_field(name=f"⌨️{ctx.guild.name} 키보드워리어 랭킹⌨️", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count[:5])]), inline=False)
-            embed.add_field(name=f"👻{ctx.guild.name} 지박령 랭킹👻", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time[:5])]), inline=False)
+            embed.add_field(name=f"⌨️ {ctx.guild.name} 키보드워리어 랭킹 ⌨️", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {data['message_count']}개" for idx, (user_id, data) in enumerate(sorted_by_message_count[:5])]), inline=False)
+            embed.add_field(name=f"👻 {ctx.guild.name} 지박령 랭킹 👻", value="\n".join([f"**{idx + 1}**. <@{user_id}>: {timedelta(seconds=int(data['voice_time']))}" for idx, (user_id, data) in enumerate(sorted_by_voice_time[:5])]), inline=False)
             view = PersistentView()
-            #view.add_item(ShowEntireRankingButton(label="전체 랭킹 보기", style=discord.ButtonStyle.primary))
             msg = await ctx.send(embed=embed, view=view)
             configs[guild_id]['ranking_message_id'] = msg.id
             save_ranking(ranking_data)
@@ -636,20 +664,20 @@ async def 길드생성(ctx, name: str, *, description: str):
         guild_role = await ctx.guild.create_role(name=f"{name}(길드)")
 
         overwrites = {
-            ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            guild_role: discord.PermissionOverwrite(read_messages=True)
+            ctx.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            guild_role: discord.PermissionOverwrite(view_channel=True)
         }
 
         list_channel = bot.get_channel(guilds[guild_id].get('list_channel_id'))
 
-        guild = await ctx.guild.create_text_channel(name, category=category, overwrites=overwrites)
+        guild = await ctx.guild.create_voice_channel(name, category=category, overwrites=overwrites)
 
         await ctx.author.add_roles(guild_role)
         button = Button(style=discord.ButtonStyle.primary, label="가입신청", custom_id=f"apply_{guild_id}_{guild_role.id}")
         created_message = await list_channel.send(embed=embed)
         await ctx.send(f"{name} 길드가 생성되었습니다.")
 
-        guilds[guild_id][guild_role.id] = {
+        guilds[guild_id][name] = {
             'guild_name': name,
             'guild_leader_id': ctx.author.id,
             'role_id': guild_role.id,
@@ -992,6 +1020,50 @@ async def 출석종료(ctx):
     today_date = datetime.now(kst).strftime("%y.%m.%d")
     await 출석부(ctx, today_date)
 
+@bot.command(name="출석예약", help="출석을 예약합니다.\n사용법 : !출석예약 <출석시작시간 hh:mm> <지각시작시간 hh:mm> <출석종료시간 hh:mm>")
+@commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
+async def 출석예약(ctx, start_time: str, late_time: str, end_time: str):
+    try:
+        datetime.strptime(start_time, "%H:%M")
+        datetime.strptime(late_time, "%H:%M")
+        datetime.strptime(end_time, "%H:%M")
+    except ValueError:
+        await ctx.author.send("시간 형식이 잘못되었습니다. 시간 형식은 hh:mm입니다.")
+        return
+
+    await ctx.author.send(f"출석 예약이 완료되었습니다.\n출석 시간: {start_time}\n지각 시간: {late_time}\n출석 종료 시간: {end_time}")
+    bot.loop.create_task(schedule_attendance(ctx, start_time, late_time, end_time))
+
+async def schedule_attendance(ctx, start_time, late_time, end_time):
+    now = datetime.now(kst)
+    print(f"현재 시간: {now}")
+
+    start_time_obj = datetime.strptime(start_time, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
+    start_time_obj = kst.localize(start_time_obj)
+    delay = (start_time_obj - now).total_seconds()
+    print(f"출석 시작까지 대기 시간: {delay}")
+    if delay > 0:
+        await asyncio.sleep(delay)
+        await 출석시작(ctx)
+    
+    now = datetime.now(kst)
+    late_time_obj = datetime.strptime(late_time, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
+    late_time_obj = kst.localize(late_time_obj)
+    delay = (late_time_obj - now).total_seconds()
+    print(f"지각 시작까지 대기 시간: {delay}")
+    if delay > 0:
+        await asyncio.sleep(delay)
+        await 지각시작(ctx)
+    
+    now = datetime.now(kst)
+    end_time_obj = datetime.strptime(end_time, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
+    end_time_obj = kst.localize(end_time_obj)
+    delay = (end_time_obj - now).total_seconds()
+    print(f"출석 종료까지 대기 시간: {delay}")
+    if delay > 0:
+        await asyncio.sleep(delay)
+        await 출석종료(ctx)
+
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component:
@@ -1229,21 +1301,16 @@ async def 출석부다운(ctx):
     except FileNotFoundError:
         await ctx.send("출석부 파일을 찾을 수 없습니다.")
 
-@bot.command(name="링크등록", help="(운영진 전용)동아리 공식 SNS, 회계장부, 회칙 등 링크를 등록합니다.\n사용법 : !링크등록 <공식사이트 링크> <유튜브 링크> <블로그 링크> <인스타 링크> <노션 링크> <회계장부 링크> <회칙 링크>")
+@bot.command(name="링크등록", help="(운영진 전용)동아리 공식 SNS, 회계장부, 회칙 등 링크를 등록합니다.\n사용법 : !링크등록 <링크 이름> <링크>")
 @commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
-async def 링크등록(ctx, website_link:str, youtube_link: str, blog_link: str, instagram_link: str, notion_link: str, accounting_book_link: str, rules_link: str = None):
+async def 링크등록(ctx, link_name: str, link: str):
     configs = load_config()
     guild_id = str(ctx.guild.id)
     if guild_id not in configs:
         configs[guild_id] = {}
-    configs[guild_id]['website_link'] = website_link
-    configs[guild_id]['youtube_link'] = youtube_link
-    configs[guild_id]['blog_link'] = blog_link
-    configs[guild_id]['instagram_link'] = instagram_link
-    configs[guild_id]['notion_link'] = notion_link
-    configs[guild_id]['accounting_book_link'] = accounting_book_link
-    if rules_link:
-        configs[guild_id]['rules_link'] = rules_link
+    if 'links' not in configs[guild_id]:
+        configs[guild_id]['links'] = {}
+    configs[guild_id]['links'][link_name] = link
     save_config(configs)
     await ctx.author.send("링크가 등록되었습니다.")
 
@@ -1258,37 +1325,26 @@ async def 바로가기(ctx):
             color=discord.Color.blue()
         )
         view = discord.ui.View()
-        if 'website_link' in configs[guild_id]:
-            embed.add_field(name="공식사이트", value=configs[guild_id]['website_link'], inline=False)
-            button = discord.ui.Button(style=discord.ButtonStyle.link, label="공식사이트", url=configs[guild_id]['website_link'])
-            view.add_item(button)
-        if 'youtube_link' in configs[guild_id]:
-            embed.add_field(name="유튜브", value=configs[guild_id]['youtube_link'], inline=False)
-            button = discord.ui.Button(style=discord.ButtonStyle.link, label="유튜브", url=configs[guild_id]['youtube_link'])
-            view.add_item(button)
-        if 'blog_link' in configs[guild_id]:
-            embed.add_field(name="블로그", value=configs[guild_id]['blog_link'], inline=False)
-            button = discord.ui.Button(style=discord.ButtonStyle.link, label="블로그", url=configs[guild_id]['blog_link'])
-            view.add_item(button)
-        if 'instagram_link' in configs[guild_id]:
-            embed.add_field(name="인스타그램", value=configs[guild_id]['instagram_link'], inline=False)
-            button = discord.ui.Button(style=discord.ButtonStyle.link, label="인스타그램", url=configs[guild_id]['instagram_link'])
-            view.add_item(button)
-        if 'notion_link' in configs[guild_id]:
-            embed.add_field(name="노션", value=configs[guild_id]['notion_link'], inline=False)
-            button = discord.ui.Button(style=discord.ButtonStyle.link, label="노션", url=configs[guild_id]['notion_link'])
-            view.add_item(button)
-        if 'accounting_book_link' in configs[guild_id]:
-            embed.add_field(name="회계장부", value=configs[guild_id]['accounting_book_link'], inline=False)
-            button = discord.ui.Button(style=discord.ButtonStyle.link, label="회계장부", url=configs[guild_id]['accounting_book_link'])
-            view.add_item(button)
-        if 'rules_link' in configs[guild_id]:
-            embed.add_field(name="회칙", value=configs[guild_id]['rules_link'], inline=False)
-            button = discord.ui.Button(style=discord.ButtonStyle.link, label="회칙", url=configs[guild_id]['rules_link'])
+        for link_name, link in configs[guild_id]['links'].items():
+            embed.add_field(name=link_name, value=link, inline=False)
+            button = discord.ui.Button(style=discord.ButtonStyle.link, label=link_name, url=link)
             view.add_item(button)
             
         await ctx.send(embed=embed, view=view)
-        
+
+@bot.command(name="링크삭제", help="(운영진 전용)등록된 링크를 삭제합니다.\n사용법 : !링크삭제")
+@commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
+async def 링크삭제(ctx, link_name: str):
+    configs = load_config()
+    guild_id = str(ctx.guild.id)
+    if guild_id in configs:
+        if 'links' in configs[guild_id]:
+            if link_name in configs[guild_id]['links']:
+                configs[guild_id]['links'].pop(link_name)
+                save_config(configs)
+                await ctx.author.send("링크가 삭제되었습니다.")
+                return
+
 
 # 봇 실행
 bot.run()
