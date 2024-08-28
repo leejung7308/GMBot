@@ -979,12 +979,21 @@ async def 지각시작(ctx):
             button_id = configs[guild_id]['attendance_button_id']
             try:
                 button_message = await ctx.channel.fetch_message(button_id)
-                await button_message.delete()
+                new_view = discord.ui.View()
+                for action_row in button_message.components:
+                    for item in action_row.children:
+                        new_button = discord.ui.Button(label=item.label, custom_id=item.custom_id)
+                        if(item.disabled):
+                            new_button.style = discord.ButtonStyle.grey
+                            new_button.disabled = True
+                        else:
+                            new_button.style = discord.ButtonStyle.red
+                            new_button.disabled = False
+                        new_view.add_item(new_button)
+                today_date = datetime.now(kst).strftime("%y.%m.%d")
+                await button_message.edit(f"{today_date} 지각 체크를 시작합니다.", view=new_view)
             except Exception as e:
                 print(f"메시지를 찾을 수 없습니다. {str(e)}")
-    today_date = datetime.now(kst).strftime("%y.%m.%d")
-    view_message = await ctx.send(f"{today_date} 지각 체크를 시작합니다.", view=view)
-    configs[guild_id]['attendance_button_id'] = view_message.id
     save_config(configs)
 
 @bot.command(name="출석종료", help="(운영진 전용)출석부를 종료하고 엑셀 파일을 저장합니다.\n사용법 : !출석종료")
@@ -1001,11 +1010,13 @@ async def 출석종료(ctx):
             if attendance_channel:
                 message_id = configs[guild_id]['attendance_message_id']
                 message = await attendance_channel.fetch_message(message_id)
+                configs[guild_id].pop('attendance_message_id')
         if 'attendance_button_id' in configs[guild_id]:
             button_id = configs[guild_id]['attendance_button_id']
             try:
                 button_message = await ctx.channel.fetch_message(button_id)
                 await button_message.delete()
+                configs[guild_id].pop('attendance_button_id')
             except Exception as e:
                 print(f"메시지를 찾을 수 없습니다. {str(e)}")
     save_config(configs)
@@ -1020,7 +1031,7 @@ async def 출석종료(ctx):
     today_date = datetime.now(kst).strftime("%y.%m.%d")
     await 출석부(ctx, today_date)
 
-@bot.command(name="출석예약", help="출석을 예약합니다.\n사용법 : !출석예약 <출석시작시간 hh:mm> <지각시작시간 hh:mm> <출석종료시간 hh:mm>")
+@bot.command(name="출석예약", help="(운영진 전용)출석을 예약합니다.\n사용법 : !출석예약 <출석시작시간 hh:mm> <지각시작시간 hh:mm> <출석종료시간 hh:mm>")
 @commands.has_any_role('봇 관리자', '운영부', 'GM 관리자')
 async def 출석예약(ctx, start_time: str, late_time: str, end_time: str):
     try:
@@ -1096,8 +1107,39 @@ async def on_interaction(interaction: discord.Interaction):
                 View = discord.ui.View()
                 View.add_item(button)               
                 await member.send(embed=embed, view=View)
+                if not interaction.message.components:
+                    return
+                new_view = discord.ui.View()
+                for action_row in interaction.message.components:
+                    for item in action_row.children:
+                        new_button = discord.ui.Button(
+                            label=item.label, 
+                            custom_id=item.custom_id
+                        )
+                        if item.disabled:
+                            new_button.style = discord.ButtonStyle.grey
+                            new_button.disabled = True
+                        elif item.custom_id == interaction.custom_id:
+                            new_button.style = discord.ButtonStyle.grey
+                            new_button.disabled = True
+                        else:
+                            new_button.style = item.style
+                            new_button.disabled = item.disabled
+                        new_view.add_item(new_button)
+                await interaction.message.edit(view=new_view)
+
         elif interaction.custom_id.startswith('attend_') or interaction.custom_id.startswith('late_'):
+            configs = load_config()
             guild_id = interaction.custom_id.split('_')[1]
+            if(configs[guild_id]['is_checking_attendance'] == False):
+                await interaction.message.delete()
+                embed = discord.Embed(
+                    title="오류",
+                    description="이미 종료된 출석입니다.",
+                    color=discord.Color.red()
+                )
+                await interaction.user.send(embed=embed)
+                return
             guild = bot.get_guild(int(guild_id))
             member_id = int(interaction.custom_id.split('_')[2])
             await interaction.message.delete()
