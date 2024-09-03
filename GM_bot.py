@@ -888,7 +888,6 @@ async def 출석시작(ctx):
     workbook.save(file_name)
 
     datas.clear()
-
     buttons = []
     for member in members:
         if not member.bot:
@@ -898,31 +897,26 @@ async def 출석시작(ctx):
             else:
                 clean_name = member.display_name.replace(" ", "")
             datas.append([clean_name,f"onTime_{member.id}"])
-    
     datas.sort(key=lambda x: x[0])
     for data in datas:
         button = discord.ui.Button(style=discord.ButtonStyle.green, label=data[0], custom_id=data[1])
         buttons.append(button)
 
-    view = discord.ui.View()
-    for button in buttons:
-        view.add_item(button)
-    
 
-    if guild_id in configs:
-        if 'attendance_button_id' in configs[guild_id]:
-            button_id = configs[guild_id]['attendance_button_id']
-            try:
-                button_message = await ctx.channel.fetch_message(button_id)
-                await button_message.delete()
-            except Exception as e:
-                print(f"메시지를 찾을 수 없습니다. {str(e)}")
-    
-    view_message = await ctx.send(f"{today_date} 출석 체크를 시작합니다.", view=view)
-
-    if guild_id in configs:
-        configs[guild_id]['attendance_button_id'] = view_message.id
-        configs[guild_id]['is_checking_attendance'] = True
+    chunksize = 25
+    for i in range(0, len(buttons), chunksize):
+        chunk = buttons[i:i+chunksize]
+        view = discord.ui.View()
+        for button in chunk:
+            view.add_item(button)
+        
+        view_message = await ctx.send(view=view)
+        
+        if guild_id in configs:
+            if 'attendance_button_ids' not in configs[guild_id]:
+                configs[guild_id]['attendance_button_ids'] = []
+            configs[guild_id]['attendance_button_ids'].append(view_message.id)
+            configs[guild_id]['is_checking_attendance'] = True
 
     embed = discord.Embed(
         title=f"{today_date} 출석 현황",
@@ -950,50 +944,31 @@ async def 지각시작(ctx):
         if 'is_checking_attendance' in configs[guild_id] and not configs[guild_id]['is_checking_attendance']:
             await ctx.send("진행중인 출석이 없습니다.")
             return
-    members = ctx.guild.members
-    datas = []
-    buttons = []
-    for member in members:
-        if not member.bot:
-            match = re.search(r'\[.*?\]\s*(.*)', member.display_name)
-            if match:
-                clean_name = match.group(1).replace(" ", "")
-            else:
-                clean_name = member.display_name.replace(" ", "")
-            datas.append([clean_name,f"onLate_{member.id}"])
-    
-    datas.sort(key=lambda x: x[0])
-    for data in datas:
-        button = discord.ui.Button(style=discord.ButtonStyle.red, label=data[0], custom_id=data[1])
-        buttons.append(button)
-
-    view = discord.ui.View()
-    for button in buttons:
-        view.add_item(button)
     
     configs = load_config()
     guild_id = str(ctx.guild.id)
 
     if guild_id in configs:
-        if 'attendance_button_id' in configs[guild_id]:
-            button_id = configs[guild_id]['attendance_button_id']
-            try:
-                button_message = await ctx.channel.fetch_message(button_id)
-                new_view = discord.ui.View()
-                for action_row in button_message.components:
-                    for item in action_row.children:
-                        new_button = discord.ui.Button(label=item.label, custom_id=item.custom_id)
-                        if(item.disabled):
-                            new_button.style = discord.ButtonStyle.grey
-                            new_button.disabled = True
-                        else:
-                            new_button.style = discord.ButtonStyle.red
-                            new_button.disabled = False
-                        new_view.add_item(new_button)
-                today_date = datetime.now(kst).strftime("%y.%m.%d")
-                await button_message.edit(f"{today_date} 지각 체크를 시작합니다.", view=new_view)
-            except Exception as e:
-                print(f"메시지를 찾을 수 없습니다. {str(e)}")
+        if 'attendance_button_ids' in configs[guild_id]:
+            for button_id in configs[guild_id]['attendance_button_ids']:
+                try:
+                    button_message = await ctx.channel.fetch_message(button_id)
+                    new_view = discord.ui.View()
+                    for action_row in button_message.components:
+                        for item in action_row.children:
+                            member_id = int(item.custom_id.split("_")[1])
+                            new_custom_id = f"onLate_{member_id}"
+                            new_button = discord.ui.Button(label=item.label, custom_id=new_custom_id)
+                            if(item.disabled):
+                                new_button.style = discord.ButtonStyle.grey
+                                new_button.disabled = True
+                            else:
+                                new_button.style = discord.ButtonStyle.red
+                                new_button.disabled = False
+                            new_view.add_item(new_button)
+                    await button_message.edit(view=new_view)
+                except Exception as e:
+                    print(f"메시지를 찾을 수 없습니다. {str(e)}")
     save_config(configs)
 
 @bot.command(name="출석종료", help="(운영진 전용)출석부를 종료하고 엑셀 파일을 저장합니다.\n사용법 : !출석종료")
@@ -1011,14 +986,14 @@ async def 출석종료(ctx):
                 message_id = configs[guild_id]['attendance_message_id']
                 message = await attendance_channel.fetch_message(message_id)
                 configs[guild_id].pop('attendance_message_id')
-        if 'attendance_button_id' in configs[guild_id]:
-            button_id = configs[guild_id]['attendance_button_id']
-            try:
-                button_message = await ctx.channel.fetch_message(button_id)
-                await button_message.delete()
-                configs[guild_id].pop('attendance_button_id')
-            except Exception as e:
-                print(f"메시지를 찾을 수 없습니다. {str(e)}")
+        if 'attendance_button_ids' in configs[guild_id]:
+            for button_id in configs[guild_id]['attendance_button_ids']:
+                try:
+                    button_message = await ctx.channel.fetch_message(button_id)
+                    await button_message.delete()
+                except Exception as e:
+                    print(f"메시지를 찾을 수 없습니다. {str(e)}")
+            configs[guild_id].pop('attendance_button_ids')
     save_config(configs)
     try:
         if message:
